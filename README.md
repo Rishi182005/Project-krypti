@@ -1,36 +1,30 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Allo Inventory — Take-Home Exercise
 
-## Getting Started
+Live URL: https://project-krypti.vercel.app
 
-First, run the development server:
+## Local Setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. Clone the repo
+2. Install dependencies: `npm install`
+3. Set environment variables in `.env.local`:
+   - `DATABASE_URL` — Neon PostgreSQL connection string
+   - `REDIS_URL` — Upstash Redis connection string (rediss://)
+   - `RESERVATION_TTL_MINUTES` — reservation window (default: 10)
+4. Run migrations: `npx prisma migrate dev`
+5. Seed database: visit `/api/seed` in browser after `npm run dev`
+6. Start dev server: `npm run dev`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## How Expiry Works
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Reservations expire after `RESERVATION_TTL_MINUTES` (10 min in production). Expiry is handled lazily — when a confirm request comes in, the API checks `expiresAt < now` and returns 410 if expired, releasing the stock automatically. A Vercel Cron job at `/api/cron/expire-reservations` running every minute handles background cleanup of stale reservations.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Concurrency
 
-## Learn More
+The reservation endpoint uses a Redis distributed lock (SET NX PX) scoped per product+warehouse. Only one request can check-and-increment stock at a time. The lock is released atomically via a Lua script. Stock increment and reservation creation happen inside a Prisma transaction.
 
-To learn more about Next.js, take a look at the following resources:
+## Trade-offs
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 503 on lock contention instead of queuing — a production system would retry with backoff
+- No UI polling — stock counts require a manual Refresh after another user reserves
+- Cron job granularity is 1 minute — expired reservations may show as reserved for up to 60 seconds
+- Seed endpoint (`/api/seed`) is public — would be protected in production
